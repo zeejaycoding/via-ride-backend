@@ -63,6 +63,7 @@ router.get('/estimate', async (req, res) => {
 
     const distanceKm = kmFromMeters(route.distance.value);
     const durationMin = Math.ceil(minFromSeconds(route.duration.value));
+    const overviewPolyline = resp.data?.routes?.[0]?.overview_polyline?.points || '';
     const profile = resolveProfile({ countryCode, region });
     const surgeInfo = resolveSurgeMultiplier(surge);
 
@@ -99,6 +100,7 @@ router.get('/estimate', async (req, res) => {
       currency: profile.currency,
       surgeLevel: surgeInfo.level,
       surgeMultiplier: surgeInfo.multiplier,
+      polylinePoints: overviewPolyline,
       cancellationPolicy: {
         freeUntilMinutes: 3,
         feeRange: { min: 1, max: 2 },
