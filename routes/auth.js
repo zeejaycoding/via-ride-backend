@@ -408,3 +408,4 @@ router.patch('/profile/avatar', (req, res) => {
 });
 
 module.exports = router;
+module.exports.getAuthenticatedUser = getAuthenticatedUser;

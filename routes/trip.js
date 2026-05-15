@@ -3,6 +3,7 @@ const axios = require('axios');
 const {
   calculateCancellationFee,
   calculateFare,
+  calculateVehicleDuration,
   resolveProfile,
   resolveSurgeMultiplier,
 } = require('../lib/pricing');
@@ -68,10 +69,11 @@ router.get('/estimate', async (req, res) => {
     const surgeInfo = resolveSurgeMultiplier(surge);
 
     const vehicles = VEHICLE_TIERS.map((t) => {
+      const estimatedDurationMin = calculateVehicleDuration(durationMin, t.id);
       const fare = calculateFare({
         vehicleId: t.id,
         distanceKm,
-        durationMin,
+        durationMin: estimatedDurationMin,
         countryCode,
         region,
         surge,
@@ -84,7 +86,7 @@ router.get('/estimate', async (req, res) => {
         perMin: fare.perMin,
         minimumFare: fare.minimumFare,
         distanceKm: Number(distanceKm.toFixed(3)),
-        durationMin,
+        durationMin: estimatedDurationMin,
         region: fare.region,
         currency: fare.currency,
         surgeLevel: fare.surgeLevel,

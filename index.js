@@ -19,6 +19,8 @@ const tripRouter = require('./routes/trip');
 app.use('/api/trip', tripRouter);
 const driversRouter = require('./routes/drivers');
 app.use('/api/drivers', driversRouter);
+const scheduledRidesRouter = require('./routes/scheduled-rides');
+app.use('/api/scheduled-rides', scheduledRidesRouter);
 
 const PORT = process.env.PORT || 4000;
 const MONGO_URI = process.env.MONGO_URI || '';

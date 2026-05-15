@@ -10,6 +10,7 @@ const UserSchema = new mongoose.Schema({
   driverStatus: { type: String, enum: ['pending', 'approved', 'rejected', 'offline', 'online'], default: 'offline' },
   isOnline: { type: Boolean, default: false },
   isApproved: { type: Boolean, default: false },
+  futureRideAccess: { type: Boolean, default: false },
   currentLocation: {
     latitude: { type: Number },
     longitude: { type: Number },
