@@ -15,6 +15,16 @@ const twilioClient = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
+const ALLOWED_ROLES = new Set(['driver', 'rider']);
+
+function normalizeRole(role) {
+  return (role || '').toString().trim().toLowerCase();
+}
+
+function isAllowedRole(role) {
+  return ALLOWED_ROLES.has(normalizeRole(role));
+}
+
 // Helper: normalize phone to E.164 format using the country code selected on the frontend.
 function normalizePhone(phone, countryCode) {
   if (!phone) return null;
@@ -100,9 +110,13 @@ async function getAuthenticatedUser(req, res) {
 router.post('/signup', async (req, res) => {
   try {
     const { name, email, phone, countryCode, gender, role, password } = req.body;
+    const requestedRole = normalizeRole(role);
 
     if (!name) return res.status(400).json({ error: 'Name is required' });
     if (!email && !phone) return res.status(400).json({ error: 'Email or phone is required' });
+    if (!isAllowedRole(requestedRole)) {
+      return res.status(400).json({ error: 'Valid role is required (driver or rider)' });
+    }
 
     // Check existing user
     const existing = await User.findOne({ $or: [{ email }, { phone }] });
@@ -116,7 +130,15 @@ router.post('/signup', async (req, res) => {
     const normalizedPhone = normalizePhone(phone, countryCode);
 
     // Create user in pending state
-    const user = new User({ name, email, phone: normalizedPhone, gender, role, passwordHash, verified: false });
+    const user = new User({
+      name,
+      email,
+      phone: normalizedPhone,
+      gender,
+      role: requestedRole,
+      passwordHash,
+      verified: false,
+    });
     await user.save();
 
     // Send verification via Twilio Verify if phone and VERIFY_SID exist
@@ -149,7 +171,7 @@ router.post('/signup', async (req, res) => {
         name,
         phone,
         email,
-        role,
+        role: requestedRole,
       },
     });
   } catch (err) {
@@ -162,15 +184,22 @@ router.post('/signup', async (req, res) => {
 // Verifies code via Twilio Verify and marks user as verified
 router.post('/verify', async (req, res) => {
   try {
-    const { userId, code } = req.body;
+    const { userId, code, expectedRole } = req.body;
+    const normalizedExpectedRole = expectedRole ? normalizeRole(expectedRole) : '';
 
     if (!userId || !code) {
       return res.status(400).json({ error: 'userId and code are required' });
+    }
+    if (expectedRole && !isAllowedRole(normalizedExpectedRole)) {
+      return res.status(400).json({ error: 'expectedRole must be driver or rider' });
     }
 
     // Get user and verification record
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
+    if (normalizedExpectedRole && normalizeRole(user.role) !== normalizedExpectedRole) {
+      return res.status(403).json({ error: 'This account is not allowed in this app' });
+    }
 
     const verification = await Verification.findOne({ userId });
     if (!verification) {
@@ -264,10 +293,14 @@ router.post('/resend', async (req, res) => {
 // returns a backend JWT for the app to use.
 router.post('/clerk', async (req, res) => {
   try {
-    const { clerkSessionId, clerkUserId } = req.body;
+    const { clerkSessionId, clerkUserId, expectedRole } = req.body;
+    const normalizedExpectedRole = normalizeRole(expectedRole);
 
     if (!clerkSessionId && !clerkUserId) {
       return res.status(400).json({ error: 'clerkSessionId or clerkUserId required' });
+    }
+    if (!isAllowedRole(normalizedExpectedRole)) {
+      return res.status(400).json({ error: 'expectedRole must be driver or rider' });
     }
 
     const CLERK_API_KEY = process.env.CLERK_SECRET_KEY;
@@ -300,8 +333,10 @@ router.post('/clerk', async (req, res) => {
     let user = null;
     if (email) user = await User.findOne({ email });
     if (!user) {
-      user = new User({ name, email, verified: true });
+      user = new User({ name, email, role: normalizedExpectedRole, verified: true });
       await user.save();
+    } else if (normalizeRole(user.role) !== normalizedExpectedRole) {
+      return res.status(403).json({ error: 'This account is not allowed in this app' });
     }
 
     // sign backend JWT
@@ -322,10 +357,14 @@ router.post('/clerk', async (req, res) => {
 // Normal email + password signin that returns backend JWT
 router.post('/login', async (req, res) => {
   try {
-    const { email, phone, identifier, password } = req.body;
+    const { email, phone, identifier, password, expectedRole } = req.body;
+    const normalizedExpectedRole = normalizeRole(expectedRole);
     const loginIdentifier = (identifier || email || phone || '').toString().trim();
     if (!loginIdentifier || !password) {
       return res.status(400).json({ error: 'identifier and password required' });
+    }
+    if (!isAllowedRole(normalizedExpectedRole)) {
+      return res.status(400).json({ error: 'expectedRole must be driver or rider' });
     }
 
     const lookup = loginIdentifier.includes('@')
@@ -334,6 +373,9 @@ router.post('/login', async (req, res) => {
 
     const user = await User.findOne(lookup);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    if (normalizeRole(user.role) !== normalizedExpectedRole) {
+      return res.status(403).json({ error: 'This account is not allowed in this app' });
+    }
     if (!user.passwordHash) return res.status(400).json({ error: 'No password set for this user' });
 
     const ok = await bcrypt.compare(password, user.passwordHash);
