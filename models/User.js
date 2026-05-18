@@ -11,6 +11,9 @@ const UserSchema = new mongoose.Schema({
   isOnline: { type: Boolean, default: false },
   isApproved: { type: Boolean, default: false },
   futureRideAccess: { type: Boolean, default: false },
+  onlineSince: { type: Date },
+  onlineSecondsToday: { type: Number, default: 0 },
+  onlineStatsDate: { type: String },
   currentLocation: {
     latitude: { type: Number },
     longitude: { type: Number },

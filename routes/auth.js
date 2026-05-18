@@ -10,10 +10,16 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+function getTwilioClient() {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+
+  if (!accountSid || !authToken) {
+    return null;
+  }
+
+  return twilio(accountSid, authToken);
+}
 
 const ALLOWED_ROLES = new Set(['driver', 'rider']);
 
@@ -146,6 +152,11 @@ router.post('/signup', async (req, res) => {
     if (normalizedPhone && process.env.TWILIO_VERIFY_SID) {
       try {
         console.log('Sending OTP to', normalizedPhone);
+        const twilioClient = getTwilioClient();
+        if (!twilioClient) {
+          throw new Error('Twilio Verify is not configured');
+        }
+
         const verification = await twilioClient.verify.v2
           .services(process.env.TWILIO_VERIFY_SID)
           .verifications.create({ to: normalizedPhone, channel: 'sms' });
@@ -210,6 +221,11 @@ router.post('/verify', async (req, res) => {
     if (verification.verifySid && process.env.TWILIO_VERIFY_SID) {
       try {
         const normalized = normalizePhone(user.phone);
+        const twilioClient = getTwilioClient();
+        if (!twilioClient) {
+          return res.status(400).json({ error: 'Twilio Verify is not configured' });
+        }
+
         const result = await twilioClient.verify.v2
           .services(process.env.TWILIO_VERIFY_SID)
           .verificationChecks.create({ to: normalized, code });
@@ -262,6 +278,11 @@ router.post('/resend', async (req, res) => {
       try {
         const normalized = normalizePhone(user.phone);
         console.log('Resending OTP to', normalized);
+        const twilioClient = getTwilioClient();
+        if (!twilioClient) {
+          throw new Error('Twilio Verify is not configured');
+        }
+
         const verification = await twilioClient.verify.v2
           .services(process.env.TWILIO_VERIFY_SID)
           .verifications.create({ to: normalized, channel: 'sms' });

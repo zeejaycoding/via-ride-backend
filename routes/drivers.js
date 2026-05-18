@@ -1,7 +1,55 @@
 const express = require('express');
 const User = require('../models/User');
+const ScheduledRide = require('../models/ScheduledRide');
+const authRouter = require('./auth');
+const { calculateFare } = require('../lib/pricing');
 
 const router = express.Router();
+const getAuthenticatedUser = authRouter.getAuthenticatedUser;
+
+function getTodayKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfToday(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function endOfToday(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+}
+
+function normalizeOnlineStats(user, now) {
+  const todayKey = getTodayKey(now);
+  if (user.onlineStatsDate === todayKey) {
+    return;
+  }
+
+  user.onlineStatsDate = todayKey;
+  user.onlineSecondsToday = 0;
+  if (user.isOnline) {
+    user.onlineSince = now;
+  }
+}
+
+function computeOnlineSecondsToday(user, now) {
+  const persisted = Number(user.onlineSecondsToday) || 0;
+  if (!user.isOnline || !user.onlineSince) {
+    return persisted;
+  }
+
+  const sinceMs = new Date(user.onlineSince).getTime();
+  if (!Number.isFinite(sinceMs)) {
+    return persisted;
+  }
+
+  return persisted + Math.max(0, Math.floor((now.getTime() - sinceMs) / 1000));
+}
+
+function formatDurationHours(seconds) {
+  const hours = seconds / 3600;
+  return `${hours.toFixed(1)}h`;
+}
 
 function toNumber(value) {
   const parsed = Number(value);
@@ -117,6 +165,103 @@ router.get('/available', async (req, res) => {
   } catch (err) {
     console.error('Driver search error', err?.message || err);
     return res.status(500).json({ error: 'Failed to search drivers' });
+  }
+});
+
+router.get('/me/dashboard', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    if (user.role !== 'driver') {
+      return res.status(403).json({ error: 'Only drivers can access dashboard stats' });
+    }
+
+    const now = new Date();
+    normalizeOnlineStats(user, now);
+    await user.save();
+
+    const dayStart = startOfToday(now);
+    const dayEnd = endOfToday(now);
+
+    const completedRides = await ScheduledRide.find({
+      acceptedBy: user._id,
+      status: 'completed',
+      updatedAt: { $gte: dayStart, $lt: dayEnd },
+    }).lean();
+
+    const ridesToday = completedRides.length;
+    const onlineSecondsToday = computeOnlineSecondsToday(user, now);
+
+    const vehicleId = (user.vehicleType || 'car').toString().toLowerCase();
+    const earningsToday = completedRides.reduce((sum, ride) => {
+      const distanceKm = Number.isFinite(Number(ride.distanceKm)) ? Number(ride.distanceKm) : 0;
+      const durationMin = Math.max(1, distanceKm * 3);
+      const fare = calculateFare({
+        vehicleId,
+        distanceKm,
+        durationMin,
+      });
+      return sum + (Number(fare.fare) || 0);
+    }, 0);
+
+    return res.status(200).json({
+      earningsToday: Number(earningsToday.toFixed(2)),
+      ridesToday,
+      rating: typeof user.rating === 'number' ? Number(user.rating.toFixed(1)) : 0,
+      onlineSecondsToday,
+      onlineTimeLabel: formatDurationHours(onlineSecondsToday),
+      isOnline: Boolean(user.isOnline),
+      isApproved: Boolean(user.isApproved),
+      driverStatus: user.driverStatus || (user.isOnline ? 'online' : 'offline'),
+      updatedAt: now.toISOString(),
+    });
+  } catch (err) {
+    console.error('Driver dashboard error', err?.message || err);
+    return res.status(500).json({ error: 'Failed to load driver dashboard stats' });
+  }
+});
+
+router.patch('/me/status', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    if (user.role !== 'driver') {
+      return res.status(403).json({ error: 'Only drivers can update status' });
+    }
+
+    const requestedOnline = Boolean(req.body?.isOnline);
+    const now = new Date();
+
+    normalizeOnlineStats(user, now);
+
+    if (!requestedOnline && user.isOnline && user.onlineSince) {
+      const sessionSeconds = Math.max(0, Math.floor((now.getTime() - new Date(user.onlineSince).getTime()) / 1000));
+      user.onlineSecondsToday = (Number(user.onlineSecondsToday) || 0) + sessionSeconds;
+      user.onlineSince = undefined;
+    }
+
+    if (requestedOnline && !user.isOnline) {
+      user.onlineSince = now;
+    }
+
+    user.isOnline = requestedOnline;
+    user.driverStatus = requestedOnline ? 'online' : 'offline';
+    await user.save();
+
+    const onlineSecondsToday = computeOnlineSecondsToday(user, now);
+
+    return res.status(200).json({
+      isOnline: Boolean(user.isOnline),
+      driverStatus: user.driverStatus,
+      onlineSecondsToday,
+      onlineTimeLabel: formatDurationHours(onlineSecondsToday),
+      updatedAt: now.toISOString(),
+    });
+  } catch (err) {
+    console.error('Driver status update error', err?.message || err);
+    return res.status(500).json({ error: 'Failed to update driver status' });
   }
 });
 
