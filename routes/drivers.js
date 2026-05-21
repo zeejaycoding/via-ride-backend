@@ -195,6 +195,11 @@ router.get('/me/dashboard', async (req, res) => {
 
     const vehicleId = (user.vehicleType || 'car').toString().toLowerCase();
     const earningsToday = completedRides.reduce((sum, ride) => {
+      const storedFare = Number(ride.finalFare);
+      if (Number.isFinite(storedFare) && storedFare > 0) {
+        return sum + storedFare;
+      }
+
       const distanceKm = Number.isFinite(Number(ride.distanceKm)) ? Number(ride.distanceKm) : 0;
       const durationMin = Math.max(1, distanceKm * 3);
       const fare = calculateFare({
@@ -202,7 +207,8 @@ router.get('/me/dashboard', async (req, res) => {
         distanceKm,
         durationMin,
       });
-      return sum + (Number(fare.fare) || 0);
+      const taxAmount = Math.round(((Number(fare.fare) || 0) * 0.05) * 100) / 100;
+      return sum + (Number(fare.fare) || 0) + taxAmount;
     }, 0);
 
     return res.status(200).json({

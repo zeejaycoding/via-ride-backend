@@ -23,6 +23,8 @@ const UserSchema = new mongoose.Schema({
   vehicleName: { type: String },
   plateNumber: { type: String },
   rating: { type: Number, default: 4.8 },
+  ratingCount: { type: Number, default: 0 },
+  ratingTotal: { type: Number, default: 0 },
   passwordHash: { type: String },
   verified: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },

@@ -2,6 +2,7 @@ const express = require('express');
 const ScheduledRide = require('../models/ScheduledRide');
 const User = require('../models/User');
 const authRouter = require('./auth');
+const { calculateFare } = require('../lib/pricing');
 
 const router = express.Router();
 const getAuthenticatedUser = authRouter.getAuthenticatedUser;
@@ -76,6 +77,59 @@ function canCancelRide(ride) {
 
   const ageMs = Date.now() - requestedAt.getTime();
   return ageMs <= 3 * 60 * 1000;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function resolveTaxAmount(subTotal) {
+  return roundMoney(Math.max(0, Number(subTotal) || 0) * 0.05);
+}
+
+function buildPaymentSummary({ ride, vehicleId, countryCode, region, distanceKm, durationMin }) {
+  const fare = calculateFare({
+    vehicleId: vehicleId || ride.selectedVehicle || 'car',
+    distanceKm: Number(distanceKm) || Number(ride.distanceKm) || 0,
+    durationMin: Number(durationMin) || Math.max(1, Math.round((Number(distanceKm) || Number(ride.distanceKm) || 0) * 3)),
+    countryCode: countryCode || ride.countryCode,
+    region: region || ride.region,
+    surge: ride.surge || 'normal',
+  });
+
+  const taxAmount = resolveTaxAmount(fare.fare);
+  const totalFare = roundMoney(fare.fare + taxAmount);
+
+  return {
+    currency: fare.currency || ride.currency || 'USD',
+    region: fare.region || ride.region || null,
+    countryCode: fare.countryCode || ride.countryCode || null,
+    baseFare: roundMoney(fare.breakdown.baseFare),
+    distanceFare: roundMoney(fare.breakdown.distanceFare),
+    timeFare: roundMoney(fare.breakdown.timeFare),
+    taxAmount,
+    totalFare,
+  };
+}
+
+async function updateUserRating(userId, score) {
+  const numericScore = Number(score);
+  if (!Number.isFinite(numericScore) || numericScore < 1 || numericScore > 5) {
+    return null;
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    return null;
+  }
+
+  user.ratingCount = Number(user.ratingCount) || 0;
+  user.ratingTotal = Number(user.ratingTotal) || 0;
+  user.ratingCount += 1;
+  user.ratingTotal += numericScore;
+  user.rating = Number((user.ratingTotal / user.ratingCount).toFixed(1));
+  await user.save();
+  return user;
 }
 
 async function findRideById(rideId) {
@@ -159,6 +213,8 @@ router.post('/request', async (req, res) => {
       vehicleCount,
       riderName,
       riderAvatarUrl,
+      countryCode,
+      region,
     } = req.body || {};
 
     const pickupLat = toNumber(pickup?.latitude);
@@ -179,6 +235,9 @@ router.post('/request', async (req, res) => {
       rideType: rideType || 'now',
       scheduledAt: new Date(),
       vehicleCount: Number.isFinite(Number(vehicleCount)) ? Number(vehicleCount) : undefined,
+      countryCode: countryCode || null,
+      region: region || null,
+      currency: 'USD',
       pickup: {
         latitude: pickupLat,
         longitude: pickupLon,
@@ -191,6 +250,16 @@ router.post('/request', async (req, res) => {
         address: destination?.address || 'Destination address',
       },
       distanceKm: Number.isFinite(Number(distanceKm)) ? Number(distanceKm) : undefined,
+      estimatedFare: Number.isFinite(Number(distanceKm))
+        ? buildPaymentSummary({
+            ride: { selectedVehicle: selectedVehicle || 'car', distanceKm, countryCode, region },
+            vehicleId: selectedVehicle || 'car',
+            countryCode,
+            region,
+            distanceKm,
+            durationMin: Math.max(1, Math.round(Number(distanceKm) * 3)),
+          }).totalFare
+        : undefined,
       status: 'requested',
       requestedAt: new Date(),
       rejectedByDrivers: [],
@@ -420,6 +489,7 @@ router.patch('/:rideId/accept', async (req, res) => {
 
     ride.status = 'accepted';
     ride.acceptedBy = driver._id;
+    ride.driverName = driver.name;
     ride.acceptedAt = new Date();
     await ride.save();
 
@@ -514,14 +584,179 @@ router.patch('/:rideId/complete', async (req, res) => {
       return res.status(403).json({ error: 'You are not assigned to this ride' });
     }
 
+    const completedAt = new Date();
+    const startedAt = ride.startedAt ? new Date(ride.startedAt) : completedAt;
+    const actualDurationMin = Math.max(1, Math.round((completedAt.getTime() - startedAt.getTime()) / 60000));
+    const payment = buildPaymentSummary({
+      ride,
+      vehicleId: ride.selectedVehicle || driver.vehicleType || 'car',
+      countryCode: ride.countryCode,
+      region: ride.region,
+      distanceKm: ride.distanceKm,
+      durationMin: actualDurationMin,
+    });
+
     ride.status = 'completed';
-    ride.completedAt = new Date();
+    ride.completedAt = completedAt;
+    ride.finalFare = payment.totalFare;
+    ride.taxAmount = payment.taxAmount;
+    ride.currency = payment.currency;
+    ride.countryCode = payment.countryCode;
+    ride.region = payment.region;
+    ride.fareBreakdown = {
+      baseFare: payment.baseFare,
+      distanceFare: payment.distanceFare,
+      timeFare: payment.timeFare,
+      taxAmount: payment.taxAmount,
+      totalFare: payment.totalFare,
+    };
     await ride.save();
 
-    return res.status(200).json({ ride: ride.toObject() });
+    return res.status(200).json({
+      ride: ride.toObject(),
+      receipt: {
+        rideId: ride._id,
+        currency: payment.currency,
+        amount: payment.totalFare,
+        taxAmount: payment.taxAmount,
+        fareBreakdown: ride.fareBreakdown,
+      },
+    });
   } catch (err) {
     console.error('Ride complete error:', err);
     return res.status(500).json({ error: 'Failed to complete ride' });
+  }
+});
+
+router.post('/:rideId/rating', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const ride = await findRideById(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const { rating, targetRole, comment } = req.body || {};
+    const numericRating = Number(rating);
+    if (!Number.isFinite(numericRating) || numericRating < 1 || numericRating > 5) {
+      return res.status(400).json({ error: 'rating must be between 1 and 5' });
+    }
+
+    const role = (targetRole || '').toString().toLowerCase();
+    let targetUserId = null;
+
+    if (role === 'driver' && String(ride.rider) === String(user._id)) {
+      targetUserId = ride.acceptedBy;
+      ride.driverRating = numericRating;
+      ride.driverRatedAt = new Date();
+    } else if (role === 'rider' && String(ride.acceptedBy || '') === String(user._id)) {
+      targetUserId = ride.rider;
+      ride.riderRating = numericRating;
+      ride.riderRatedAt = new Date();
+    } else {
+      return res.status(403).json({ error: 'You are not allowed to rate this user' });
+    }
+
+    if (comment) {
+      ride.ratingComment = comment.toString().trim().slice(0, 500);
+    }
+
+    await ride.save();
+    const targetUser = targetUserId ? await updateUserRating(targetUserId, numericRating) : null;
+
+    return res.status(200).json({
+      ride: ride.toObject(),
+      targetUser: targetUser
+        ? {
+            _id: targetUser._id,
+            rating: targetUser.rating,
+            ratingCount: targetUser.ratingCount,
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error('Ride rating error:', err);
+    return res.status(500).json({ error: 'Failed to save rating' });
+  }
+});
+
+router.post('/:rideId/issues', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const ride = await findRideById(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const { category, details } = req.body || {};
+    const issue = {
+      reportedBy: user._id,
+      category: (category || 'general').toString().trim().slice(0, 80),
+      details: (details || '').toString().trim().slice(0, 1000),
+      createdAt: new Date(),
+    };
+
+    if (!Array.isArray(ride.reportIssues)) {
+      ride.reportIssues = [];
+    }
+
+    ride.reportIssues.push(issue);
+    await ride.save();
+
+    return res.status(200).json({ ride: ride.toObject(), issue });
+  } catch (err) {
+    console.error('Ride issue report error:', err);
+    return res.status(500).json({ error: 'Failed to report issue' });
+  }
+});
+
+router.get('/:rideId/receipt', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const ride = await findRideById(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const isOwner = String(ride.rider) === String(user._id) || String(ride.acceptedBy || '') === String(user._id);
+    if (!isOwner) {
+      return res.status(403).json({ error: 'You are not allowed to view this receipt' });
+    }
+
+    let driverName = ride.driverName || ride.driver?.name || null;
+    if (!driverName && ride.acceptedBy) {
+      const driver = await User.findById(ride.acceptedBy).lean();
+      driverName = driver?.name || null;
+    }
+
+    return res.status(200).json({
+      receipt: {
+        rideId: ride._id,
+        riderName: ride.riderName,
+        driverName,
+        pickup: ride.pickup,
+        destination: ride.destination,
+        selectedVehicle: ride.selectedVehicle,
+        currency: ride.currency || 'USD',
+        estimatedFare: ride.estimatedFare || null,
+        finalFare: ride.finalFare || null,
+        taxAmount: ride.taxAmount || null,
+        fareBreakdown: ride.fareBreakdown || null,
+        completedAt: ride.completedAt || null,
+        startedAt: ride.startedAt || null,
+        requestedAt: ride.requestedAt || null,
+        status: ride.status,
+      },
+    });
+  } catch (err) {
+    console.error('Ride receipt error:', err);
+    return res.status(500).json({ error: 'Failed to load receipt' });
   }
 });
 
