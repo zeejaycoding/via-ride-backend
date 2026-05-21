@@ -222,6 +222,40 @@ router.get('/me/dashboard', async (req, res) => {
   }
 });
 
+router.patch('/me/location', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    if (user.role !== 'driver') {
+      return res.status(403).json({ error: 'Only drivers can update location' });
+    }
+
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+    }
+
+    user.currentLocation = {
+      latitude,
+      longitude,
+      updatedAt: new Date(),
+    };
+
+    await user.save();
+
+    return res.status(200).json({
+      currentLocation: user.currentLocation,
+      updatedAt: user.currentLocation.updatedAt,
+    });
+  } catch (err) {
+    console.error('Driver location update error', err?.message || err);
+    return res.status(500).json({ error: 'Failed to update driver location' });
+  }
+});
+
 router.patch('/me/status', async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req, res);
