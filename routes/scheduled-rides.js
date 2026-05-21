@@ -68,6 +68,16 @@ function parseScheduledAt(value) {
   return Number.isNaN(scheduledDate.getTime()) ? null : scheduledDate;
 }
 
+function canCancelRide(ride) {
+  const requestedAt = ride?.requestedAt ? new Date(ride.requestedAt) : null;
+  if (!requestedAt || Number.isNaN(requestedAt.getTime())) {
+    return false;
+  }
+
+  const ageMs = Date.now() - requestedAt.getTime();
+  return ageMs <= 3 * 60 * 1000;
+}
+
 async function findRideById(rideId) {
   if (!rideId) return null;
   return ScheduledRide.findById(rideId);
@@ -167,6 +177,7 @@ router.post('/request', async (req, res) => {
       rideKind: 'now',
       selectedVehicle: selectedVehicle || 'car',
       rideType: rideType || 'now',
+      scheduledAt: new Date(),
       vehicleCount: Number.isFinite(Number(vehicleCount)) ? Number(vehicleCount) : undefined,
       pickup: {
         latitude: pickupLat,
@@ -345,6 +356,44 @@ router.get('/rider/current', async (req, res) => {
   }
 });
 
+router.patch('/:rideId/cancel', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const ride = await findRideById(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const isRider = String(ride.rider) === String(user._id);
+    const isAssignedDriver = String(ride.acceptedBy || '') === String(user._id);
+
+    if (!isRider && !isAssignedDriver) {
+      return res.status(403).json({ error: 'You are not allowed to cancel this ride' });
+    }
+
+    if (!['requested', 'accepted'].includes(ride.status)) {
+      return res.status(409).json({ error: 'This ride can no longer be cancelled' });
+    }
+
+    if (!canCancelRide(ride)) {
+      return res.status(409).json({ error: 'Ride cancellation window has expired' });
+    }
+
+    ride.status = 'cancelled';
+    ride.cancelledAt = new Date();
+    ride.cancelledBy = user._id;
+    await ride.save();
+
+    const driver = ride.acceptedBy ? await User.findById(ride.acceptedBy).lean() : null;
+    return res.status(200).json({ ride: serializeRide(ride.toObject(), driver) });
+  } catch (err) {
+    console.error('Ride cancel error:', err);
+    return res.status(500).json({ error: 'Failed to cancel ride' });
+  }
+});
+
 router.patch('/:rideId/accept', async (req, res) => {
   try {
     const driver = await getAuthenticatedUser(req, res);
@@ -417,20 +466,19 @@ router.patch('/:rideId/reject', async (req, res) => {
 
 router.patch('/:rideId/start', async (req, res) => {
   try {
-    const rider = await getAuthenticatedUser(req, res);
-    if (!rider) return;
-
-    if (rider.role !== 'rider') {
-      return res.status(403).json({ error: 'Only riders can start the ride' });
-    }
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
 
     const ride = await findRideById(req.params.rideId);
     if (!ride) {
       return res.status(404).json({ error: 'Ride not found' });
     }
 
-    if (String(ride.rider) !== String(rider._id)) {
-      return res.status(403).json({ error: 'This ride does not belong to you' });
+    const isRider = String(ride.rider) === String(user._id);
+    const isAssignedDriver = String(ride.acceptedBy || '') === String(user._id);
+
+    if (!isRider && !isAssignedDriver) {
+      return res.status(403).json({ error: 'You are not allowed to start this ride' });
     }
 
     if (ride.status !== 'accepted') {

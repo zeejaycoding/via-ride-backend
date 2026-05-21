@@ -18,7 +18,7 @@ const ScheduledRideSchema = new mongoose.Schema({
     address: { type: String, required: true },
   },
   rideType: { type: String, default: 'schedule' },
-  scheduledAt: { type: Date, required: true, index: true },
+  scheduledAt: { type: Date, required: true, index: true, default: Date.now },
   distanceKm: { type: Number },
   status: {
     type: String,
@@ -32,6 +32,8 @@ const ScheduledRideSchema = new mongoose.Schema({
   requestedAt: { type: Date, default: Date.now },
   startedAt: { type: Date },
   completedAt: { type: Date },
+  cancelledAt: { type: Date },
+  cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
