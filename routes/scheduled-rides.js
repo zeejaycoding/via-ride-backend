@@ -354,7 +354,7 @@ router.get('/driver/requests', async (req, res) => {
       status: 'requested',
       rideKind: 'now',
       acceptedBy: { $exists: false },
-      rejectedByDrivers: { $ne: driver._id },
+      rejectedByDrivers: { $nin: [driver._id] },
     })
       .sort({ requestedAt: -1, createdAt: -1 })
       .lean();
