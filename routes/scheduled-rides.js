@@ -79,6 +79,22 @@ function canCancelRide(ride) {
   return ageMs <= 3 * 60 * 1000;
 }
 
+const DRIVER_REQUEST_TTL_MS = 25 * 1000;
+
+function isExpiredRideRequest(ride) {
+  if (!ride || ride.status !== 'requested' || ride.rideKind !== 'now' || ride.acceptedBy) {
+    return false;
+  }
+
+  const requestedAt = ride.requestedAt || ride.createdAt;
+  const requestedDate = requestedAt ? new Date(requestedAt) : null;
+  if (!requestedDate || Number.isNaN(requestedDate.getTime())) {
+    return true;
+  }
+
+  return Date.now() - requestedDate.getTime() > DRIVER_REQUEST_TTL_MS;
+}
+
 function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
@@ -354,6 +370,7 @@ router.get('/driver/requests', async (req, res) => {
           distanceKm,
         };
       })
+      .filter((ride) => !isExpiredRideRequest(ride))
       .filter((ride) => ride.distanceKm == null || ride.distanceKm <= radiusKm)
       .slice(0, 10);
 
@@ -586,6 +603,10 @@ router.patch('/:rideId/accept', async (req, res) => {
 
     if (ride.status !== 'requested' || ride.acceptedBy) {
       return res.status(409).json({ error: 'Ride is no longer available' });
+    }
+
+    if (isExpiredRideRequest(ride)) {
+      return res.status(409).json({ error: 'Ride request has expired' });
     }
 
     const riderRequestedVehicle = (ride.selectedVehicle || 'car').toString().toLowerCase();
