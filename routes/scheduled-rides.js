@@ -504,6 +504,34 @@ router.get('/driver/recent', async (req, res) => {
   }
 });
 
+router.get('/:rideId', async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) return;
+
+    const ride = await findRideById(req.params.rideId);
+    if (!ride) {
+      return res.status(404).json({ error: 'Ride not found' });
+    }
+
+    const isRider = String(ride.rider) === String(user._id);
+    const isDriver = String(ride.acceptedBy || '') === String(user._id);
+    if (!isRider && !isDriver) {
+      return res.status(403).json({ error: 'You are not allowed to view this ride' });
+    }
+
+    let driver = null;
+    if (ride.acceptedBy) {
+      driver = await User.findById(ride.acceptedBy).lean();
+    }
+
+    return res.status(200).json({ ride: serializeRide(ride.toObject(), driver) });
+  } catch (err) {
+    console.error('Ride fetch error:', err);
+    return res.status(500).json({ error: 'Failed to load ride' });
+  }
+});
+
 router.patch('/:rideId/cancel', async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req, res);
