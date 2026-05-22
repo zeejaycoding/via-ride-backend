@@ -360,9 +360,25 @@ router.get('/driver/requests', async (req, res) => {
       .filter((ride) => ride.pickupDistanceKm == null || ride.pickupDistanceKm <= radiusKm)
       .slice(0, 10);
 
+    // Bulk-lookup rider User documents so drivers always see fresh profile pictures.
+    const riderIds = [...new Set(availableRides.map((r) => String(r.rider)).filter(Boolean))];
+    const riderDocs = riderIds.length > 0
+      ? await User.find({ _id: { $in: riderIds } }, { avatarUrl: 1, name: 1 }).lean()
+      : [];
+    const riderMap = Object.fromEntries(riderDocs.map((u) => [String(u._id), u]));
+
+    const ridesWithAvatars = availableRides.map((ride) => {
+      const riderDoc = riderMap[String(ride.rider)];
+      return {
+        ...ride,
+        riderAvatarUrl: riderDoc?.avatarUrl || ride.riderAvatarUrl || null,
+        riderName: riderDoc?.name || ride.riderName || 'Rider',
+      };
+    });
+
     return res.status(200).json({
-      rides: availableRides,
-      count: availableRides.length,
+      rides: ridesWithAvatars,
+      count: ridesWithAvatars.length,
       radiusKm,
       driverLocation: hasDriverLocation ? { latitude: driverLat, longitude: driverLon } : null,
     });
@@ -392,16 +408,20 @@ router.get('/driver/current', async (req, res) => {
       return res.status(200).json({ ride: null });
     }
 
-    const rider = await User.findById(ride.rider).lean();
+    const riderUser = await User.findById(ride.rider).lean();
 
     return res.status(200).json({
       ride: {
         ...ride,
-        rider: rider
+        // Expose fresh avatar + name at the top level so the driver app can read
+        // riderAvatarUrl / riderName directly without drilling into the nested rider object.
+        riderAvatarUrl: riderUser?.avatarUrl || ride.riderAvatarUrl || null,
+        riderName: riderUser?.name || ride.riderName || 'Rider',
+        rider: riderUser
           ? {
-              _id: rider._id,
-              name: rider.name,
-              avatarUrl: rider.avatarUrl,
+              _id: riderUser._id,
+              name: riderUser.name,
+              avatarUrl: riderUser.avatarUrl,
             }
           : ride.rider,
       },
