@@ -346,15 +346,18 @@ router.get('/driver/requests', async (req, res) => {
     const availableRides = rides
       .map((ride) => {
         const pickup = parseRidePoint(ride.pickup);
-        const distanceKm = hasDriverLocation && pickup
+        const pickupDistanceKm = hasDriverLocation && pickup
           ? Number(haversineKm(driverLat, driverLon, pickup.latitude, pickup.longitude).toFixed(2))
           : null;
+        const rideDistanceKm = Number(ride.distanceKm);
         return {
           ...ride,
-          distanceKm,
+          // Keep the rider trip distance for display while still exposing driver->pickup proximity.
+          distanceKm: Number.isFinite(rideDistanceKm) ? Number(rideDistanceKm.toFixed(2)) : pickupDistanceKm,
+          pickupDistanceKm,
         };
       })
-      .filter((ride) => ride.distanceKm == null || ride.distanceKm <= radiusKm)
+      .filter((ride) => ride.pickupDistanceKm == null || ride.pickupDistanceKm <= radiusKm)
       .slice(0, 10);
 
     return res.status(200).json({
