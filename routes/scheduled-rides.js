@@ -492,9 +492,9 @@ router.get('/driver/recent', async (req, res) => {
 
     return res.status(200).json({
       recents: rides.map((ride) => buildRecentRideEntry(ride, {
-        title: ride.riderName || 'Recent rider',
-        address: ride.pickup?.address || 'Pickup location',
-        detail: ride.destination?.address || ride.destination?.name || 'Destination',
+        title: ride.destination?.name || ride.destination?.address || 'Recent destination',
+        address: ride.destination?.address || ride.destination?.name || 'Recent destination',
+        detail: ride.pickup?.address || 'Pickup location',
       })),
       count: rides.length,
     });
