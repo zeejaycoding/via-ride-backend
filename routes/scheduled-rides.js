@@ -112,6 +112,23 @@ function buildPaymentSummary({ ride, vehicleId, countryCode, region, distanceKm,
   };
 }
 
+function buildRecentRideEntry(ride, options = {}) {
+  const pickupAddress = ride?.pickup?.address || 'Pickup location';
+  const destinationAddress = ride?.destination?.address || ride?.destination?.name || 'Destination';
+
+  return {
+    _id: String(ride._id),
+    title: options.title || destinationAddress,
+    address: options.address || destinationAddress,
+    detail: options.detail || pickupAddress,
+    pickupAddress,
+    destinationAddress,
+    selectedVehicle: ride.selectedVehicle || 'car',
+    finalFare: typeof ride.finalFare === 'number' ? ride.finalFare : null,
+    completedAt: ride.completedAt || ride.updatedAt || ride.requestedAt || null,
+  };
+}
+
 async function updateUserRating(userId, score) {
   const numericScore = Number(score);
   if (!Number.isFinite(numericScore) || numericScore < 1 || numericScore > 5) {
@@ -422,6 +439,68 @@ router.get('/rider/current', async (req, res) => {
   } catch (err) {
     console.error('Rider current ride error:', err);
     return res.status(500).json({ error: 'Failed to load ride status' });
+  }
+});
+
+router.get('/rider/recent', async (req, res) => {
+  try {
+    const rider = await getAuthenticatedUser(req, res);
+    if (!rider) return;
+
+    if (rider.role !== 'rider') {
+      return res.status(403).json({ error: 'Only riders can view recent rides' });
+    }
+
+    const rides = await ScheduledRide.find({
+      rider: rider._id,
+      status: 'completed',
+    })
+      .sort({ completedAt: -1, updatedAt: -1, createdAt: -1 })
+      .limit(5)
+      .lean();
+
+    return res.status(200).json({
+      recents: rides.map((ride) => buildRecentRideEntry(ride, {
+        title: ride.destination?.name || ride.destination?.address || 'Recent destination',
+        address: ride.destination?.address || ride.destination?.name || 'Recent destination',
+        detail: ride.pickup?.address || 'Pickup location',
+      })),
+      count: rides.length,
+    });
+  } catch (err) {
+    console.error('Rider recent rides error:', err);
+    return res.status(500).json({ error: 'Failed to load recent rides' });
+  }
+});
+
+router.get('/driver/recent', async (req, res) => {
+  try {
+    const driver = await getAuthenticatedUser(req, res);
+    if (!driver) return;
+
+    if (driver.role !== 'driver') {
+      return res.status(403).json({ error: 'Only drivers can view recent rides' });
+    }
+
+    const rides = await ScheduledRide.find({
+      acceptedBy: driver._id,
+      status: 'completed',
+    })
+      .sort({ completedAt: -1, updatedAt: -1, createdAt: -1 })
+      .limit(5)
+      .lean();
+
+    return res.status(200).json({
+      recents: rides.map((ride) => buildRecentRideEntry(ride, {
+        title: ride.riderName || 'Recent rider',
+        address: ride.pickup?.address || 'Pickup location',
+        detail: ride.destination?.address || ride.destination?.name || 'Destination',
+      })),
+      count: rides.length,
+    });
+  } catch (err) {
+    console.error('Driver recent rides error:', err);
+    return res.status(500).json({ error: 'Failed to load recent rides' });
   }
 });
 
