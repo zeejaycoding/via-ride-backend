@@ -605,11 +605,11 @@ router.patch('/:rideId/cancel', async (req, res) => {
       return res.status(403).json({ error: 'You are not allowed to cancel this ride' });
     }
 
-    if (!['requested', 'accepted'].includes(ride.status)) {
+    if (!['requested', 'accepted', 'in_progress'].includes(ride.status)) {
       return res.status(409).json({ error: 'This ride can no longer be cancelled' });
     }
 
-    if (!canCancelRide(ride)) {
+    if (ride.status !== 'in_progress' && !canCancelRide(ride)) {
       return res.status(409).json({ error: 'Ride cancellation window has expired' });
     }
 
