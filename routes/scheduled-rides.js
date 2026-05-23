@@ -153,6 +153,24 @@ function buildPaymentSummary({ ride, vehicleId, countryCode, region, distanceKm,
   };
 }
 
+function resolveRidePrice(ride) {
+  const existingFare = Number(ride?.finalFare ?? ride?.estimatedFare);
+  if (Number.isFinite(existingFare) && existingFare >= 0) {
+    return roundMoney(existingFare);
+  }
+
+  const payment = buildPaymentSummary({
+    ride,
+    vehicleId: ride?.selectedVehicle || 'car',
+    countryCode: ride?.countryCode,
+    region: ride?.region,
+    distanceKm: ride?.distanceKm,
+    durationMin: Math.max(1, Math.round((Number(ride?.distanceKm) || 0) * 3)),
+  });
+
+  return payment.totalFare;
+}
+
 function buildRecentRideEntry(ride, options = {}) {
   const pickupAddress = ride?.pickup?.address || 'Pickup location';
   const destinationAddress = ride?.destination?.address || ride?.destination?.name || 'Destination';
@@ -414,6 +432,10 @@ router.get('/driver/requests', async (req, res) => {
       const riderDoc = riderMap[String(ride.rider)];
       return {
         ...ride,
+        estimatedFare: Number.isFinite(Number(ride.estimatedFare))
+          ? roundMoney(Number(ride.estimatedFare))
+          : resolveRidePrice(ride),
+        currency: ride.currency || 'USD',
         riderAvatarUrl: riderDoc?.avatarUrl || ride.riderAvatarUrl || null,
         riderName: riderDoc?.name || ride.riderName || 'Rider',
       };
