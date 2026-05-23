@@ -58,6 +58,47 @@ function serializeRide(ride, driver) {
   };
 }
 
+function buildUserSummary(user) {
+  if (!user) return null;
+
+  return {
+    _id: user._id,
+    name: user.name,
+    avatarUrl: user.avatarUrl,
+  };
+}
+
+function toPlainRide(ride) {
+  return ride && typeof ride.toObject === 'function' ? ride.toObject() : ride;
+}
+
+async function enrichRideWithUsers(ride) {
+  const plainRide = toPlainRide(ride);
+  if (!plainRide) return null;
+
+  const riderId = plainRide.rider ? String(plainRide.rider) : null;
+  const driverId = plainRide.acceptedBy ? String(plainRide.acceptedBy) : null;
+  const userIds = [...new Set([riderId, driverId].filter(Boolean))];
+
+  const users = userIds.length > 0
+    ? await User.find({ _id: { $in: userIds } }, { name: 1, avatarUrl: 1 }).lean()
+    : [];
+  const userMap = Object.fromEntries(users.map((user) => [String(user._id), user]));
+
+  const riderUser = riderId ? userMap[riderId] : null;
+  const driverUser = driverId ? userMap[driverId] : null;
+
+  return {
+    ...plainRide,
+    riderName: riderUser?.name || plainRide.riderName || 'Rider',
+    riderAvatarUrl: riderUser?.avatarUrl || plainRide.riderAvatarUrl || null,
+    driverName: driverUser?.name || plainRide.driverName || null,
+    driverAvatarUrl: driverUser?.avatarUrl || plainRide.driverAvatarUrl || null,
+    rider: riderUser ? buildUserSummary(riderUser) : plainRide.rider,
+    driver: driverUser ? buildUserSummary(driverUser) : plainRide.driver || null,
+  };
+}
+
 function toNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -309,9 +350,11 @@ router.get('/driver/available', async (req, res) => {
       .sort({ scheduledAt: 1, createdAt: -1 })
       .lean();
 
+    const rides = await Promise.all(upcomingRides.map((ride) => enrichRideWithUsers(ride)));
+
     return res.status(200).json({
-      rides: upcomingRides,
-      count: upcomingRides.length,
+      rides,
+      count: rides.length,
     });
   } catch (err) {
     console.error('Scheduled ride driver fetch error:', err);
@@ -453,12 +496,7 @@ router.get('/rider/current', async (req, res) => {
       return res.status(200).json({ ride: null });
     }
 
-    let driver = null;
-    if (ride.acceptedBy) {
-      driver = await User.findById(ride.acceptedBy).lean();
-    }
-
-    return res.status(200).json({ ride: serializeRide(ride, driver) });
+    return res.status(200).json({ ride: await enrichRideWithUsers(ride) });
   } catch (err) {
     console.error('Rider current ride error:', err);
     return res.status(500).json({ error: 'Failed to load ride status' });
@@ -543,12 +581,7 @@ router.get('/:rideId', async (req, res) => {
       return res.status(403).json({ error: 'You are not allowed to view this ride' });
     }
 
-    let driver = null;
-    if (ride.acceptedBy) {
-      driver = await User.findById(ride.acceptedBy).lean();
-    }
-
-    return res.status(200).json({ ride: serializeRide(ride.toObject(), driver) });
+    return res.status(200).json({ ride: await enrichRideWithUsers(ride) });
   } catch (err) {
     console.error('Ride fetch error:', err);
     return res.status(500).json({ error: 'Failed to load ride' });
@@ -585,8 +618,7 @@ router.patch('/:rideId/cancel', async (req, res) => {
     ride.cancelledBy = user._id;
     await ride.save();
 
-    const driver = ride.acceptedBy ? await User.findById(ride.acceptedBy).lean() : null;
-    return res.status(200).json({ ride: serializeRide(ride.toObject(), driver) });
+    return res.status(200).json({ ride: await enrichRideWithUsers(ride) });
   } catch (err) {
     console.error('Ride cancel error:', err);
     return res.status(500).json({ error: 'Failed to cancel ride' });
@@ -623,7 +655,7 @@ router.patch('/:rideId/accept', async (req, res) => {
     ride.acceptedAt = new Date();
     await ride.save();
 
-    return res.status(200).json({ ride: ride.toObject() });
+    return res.status(200).json({ ride: await enrichRideWithUsers(ride) });
   } catch (err) {
     console.error('Ride accept error:', err);
     return res.status(500).json({ error: 'Failed to accept ride' });
@@ -657,7 +689,7 @@ router.patch('/:rideId/reject', async (req, res) => {
     }
 
     await ride.save();
-    return res.status(200).json({ ride: ride.toObject() });
+    return res.status(200).json({ ride: await enrichRideWithUsers(ride) });
   } catch (err) {
     console.error('Ride reject error:', err);
     return res.status(500).json({ error: 'Failed to reject ride' });
@@ -689,7 +721,7 @@ router.patch('/:rideId/start', async (req, res) => {
     ride.startedAt = new Date();
     await ride.save();
 
-    return res.status(200).json({ ride: ride.toObject() });
+    return res.status(200).json({ ride: await enrichRideWithUsers(ride) });
   } catch (err) {
     console.error('Ride start error:', err);
     return res.status(500).json({ error: 'Failed to start ride' });
