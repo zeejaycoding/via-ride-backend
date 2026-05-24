@@ -136,6 +136,19 @@ function parseScheduledAt(value) {
   return Number.isNaN(scheduledDate.getTime()) ? null : scheduledDate;
 }
 
+function areRidePointsEqual(left, right, tolerance = 0.0003) {
+  const leftLat = Number(left?.latitude);
+  const leftLon = Number(left?.longitude);
+  const rightLat = Number(right?.latitude);
+  const rightLon = Number(right?.longitude);
+
+  if (!Number.isFinite(leftLat) || !Number.isFinite(leftLon) || !Number.isFinite(rightLat) || !Number.isFinite(rightLon)) {
+    return false;
+  }
+
+  return Math.abs(leftLat - rightLat) <= tolerance && Math.abs(leftLon - rightLon) <= tolerance;
+}
+
 function canCancelRide(ride) {
   const requestedAt = ride?.requestedAt ? new Date(ride.requestedAt) : null;
   if (!requestedAt || Number.isNaN(requestedAt.getTime())) {
@@ -362,10 +375,40 @@ router.post('/request', async (req, res) => {
       return res.status(400).json({ error: 'Valid pickup and destination coordinates are required' });
     }
 
-    const selectedVehicleId = (selectedVehicle || 'car').toString();
-    const routePricing = await buildRoutePricing({
+    const routeSignature = {
       pickup: { latitude: pickupLat, longitude: pickupLon },
       destination: { latitude: destinationLat, longitude: destinationLon },
+    };
+
+    const existingRide = await ScheduledRide.findOne({
+      rider: rider._id,
+      rideKind: 'now',
+      status: { $in: ['requested', 'accepted', 'in_progress', 'completed', 'cancelled'] },
+    })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean();
+
+    if (existingRide) {
+      const sameRoute = areRidePointsEqual(existingRide.pickup, routeSignature.pickup)
+        && areRidePointsEqual(existingRide.destination, routeSignature.destination);
+
+      if (sameRoute && ['requested', 'accepted', 'in_progress'].includes(existingRide.status)) {
+        return res.status(200).json({ ride: existingRide });
+      }
+
+      if (sameRoute && ['completed', 'cancelled'].includes(existingRide.status)) {
+        const updatedAtMs = existingRide.updatedAt ? new Date(existingRide.updatedAt).getTime() : NaN;
+        const elapsedMs = Number.isFinite(updatedAtMs) ? Date.now() - updatedAtMs : Number.POSITIVE_INFINITY;
+        if (elapsedMs < 45_000) {
+          return res.status(409).json({ error: 'Ride was just closed. Please wait a moment before requesting again.' });
+        }
+      }
+    }
+
+    const selectedVehicleId = (selectedVehicle || 'car').toString();
+    const routePricing = await buildRoutePricing({
+      pickup: routeSignature.pickup,
+      destination: routeSignature.destination,
       selectedVehicle: selectedVehicleId,
       countryCode,
       region,
