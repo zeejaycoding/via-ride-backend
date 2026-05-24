@@ -467,6 +467,8 @@ router.get('/driver/requests', async (req, res) => {
       status: 'requested',
       rideKind: 'now',
       acceptedBy: { $exists: false },
+      completedAt: { $exists: false },
+      cancelledAt: { $exists: false },
       rejectedByDrivers: { $nin: [driver._id] },
     })
       .sort({ requestedAt: -1, createdAt: -1 })
