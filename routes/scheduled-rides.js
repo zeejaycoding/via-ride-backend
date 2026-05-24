@@ -68,6 +68,22 @@ function buildUserSummary(user) {
   };
 }
 
+function buildDriverSummary(user) {
+  if (!user) return null;
+
+  return {
+    _id: user._id,
+    name: user.name,
+    avatarUrl: user.avatarUrl,
+    vehicleType: user.vehicleType || null,
+    vehicleName: user.vehicleName || null,
+    plateNumber: user.plateNumber || null,
+    rating: typeof user.rating === 'number' ? user.rating : null,
+    isOnline: Boolean(user.isOnline),
+    currentLocation: user.currentLocation || null,
+  };
+}
+
 function toPlainRide(ride) {
   return ride && typeof ride.toObject === 'function' ? ride.toObject() : ride;
 }
@@ -95,7 +111,7 @@ async function enrichRideWithUsers(ride) {
     driverName: driverUser?.name || plainRide.driverName || null,
     driverAvatarUrl: driverUser?.avatarUrl || plainRide.driverAvatarUrl || null,
     rider: riderUser ? buildUserSummary(riderUser) : plainRide.rider,
-    driver: driverUser ? buildUserSummary(driverUser) : plainRide.driver || null,
+    driver: driverUser ? buildDriverSummary(driverUser) : plainRide.driver || null,
   };
 }
 
