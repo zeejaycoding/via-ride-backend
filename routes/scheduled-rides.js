@@ -982,9 +982,11 @@ router.get('/:rideId/receipt', async (req, res) => {
     }
 
     let driverName = ride.driverName || ride.driver?.name || null;
+    let driverAvatarUrl = ride.driverAvatarUrl || ride.driver?.avatarUrl || null;
     if (!driverName && ride.acceptedBy) {
       const driver = await User.findById(ride.acceptedBy).lean();
       driverName = driver?.name || null;
+      driverAvatarUrl = driverAvatarUrl || driver?.avatarUrl || null;
     }
 
     return res.status(200).json({
@@ -992,6 +994,7 @@ router.get('/:rideId/receipt', async (req, res) => {
         rideId: ride._id,
         riderName: ride.riderName,
         driverName,
+        driverAvatarUrl,
         pickup: ride.pickup,
         destination: ride.destination,
         selectedVehicle: ride.selectedVehicle,
