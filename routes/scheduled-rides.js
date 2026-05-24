@@ -1,8 +1,9 @@
 const express = require('express');
+const axios = require('axios');
 const ScheduledRide = require('../models/ScheduledRide');
 const User = require('../models/User');
 const authRouter = require('./auth');
-const { calculateFare } = require('../lib/pricing');
+const { calculateFare, calculateVehicleDuration } = require('../lib/pricing');
 
 const router = express.Router();
 const getAuthenticatedUser = authRouter.getAuthenticatedUser;
@@ -147,6 +148,40 @@ function canCancelRide(ride) {
 
 function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+async function buildRoutePricing({ pickup, destination, selectedVehicle, countryCode, region, surge }) {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing GOOGLE_MAPS_API_KEY');
+  }
+
+  const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.latitude},${pickup.longitude}&destination=${destination.latitude},${destination.longitude}&key=${apiKey}`;
+  const response = await axios.get(directionsUrl, { timeout: 8000 });
+  const route = response.data?.routes?.[0]?.legs?.[0];
+
+  if (!route) {
+    throw new Error('No route found');
+  }
+
+  const distanceKm = roundMoney(Math.max(0, Number(route.distance?.value || 0) / 1000));
+  const durationMin = Math.max(1, Math.ceil(Math.max(0, Number(route.duration?.value || 0)) / 60));
+  const vehicleId = (selectedVehicle || 'car').toString();
+  const vehicleDurationMin = calculateVehicleDuration(durationMin, vehicleId);
+  const fare = calculateFare({
+    vehicleId,
+    distanceKm,
+    durationMin: vehicleDurationMin,
+    countryCode,
+    region,
+    surge,
+  });
+
+  return {
+    distanceKm,
+    durationMin,
+    fare,
+  };
 }
 
 function resolveTaxAmount(subTotal) {
@@ -327,18 +362,28 @@ router.post('/request', async (req, res) => {
       return res.status(400).json({ error: 'Valid pickup and destination coordinates are required' });
     }
 
+    const selectedVehicleId = (selectedVehicle || 'car').toString();
+    const routePricing = await buildRoutePricing({
+      pickup: { latitude: pickupLat, longitude: pickupLon },
+      destination: { latitude: destinationLat, longitude: destinationLon },
+      selectedVehicle: selectedVehicleId,
+      countryCode,
+      region,
+      surge: null,
+    });
+
     const ride = await ScheduledRide.create({
       rider: rider._id,
       riderName: riderName || rider.name,
       riderAvatarUrl: riderAvatarUrl || rider.avatarUrl,
       rideKind: 'now',
-      selectedVehicle: selectedVehicle || 'car',
+      selectedVehicle: selectedVehicleId,
       rideType: rideType || 'now',
       scheduledAt: new Date(),
       vehicleCount: Number.isFinite(Number(vehicleCount)) ? Number(vehicleCount) : undefined,
       countryCode: countryCode || null,
       region: region || null,
-      currency: 'USD',
+      currency: routePricing.fare.currency || 'USD',
       pickup: {
         latitude: pickupLat,
         longitude: pickupLon,
@@ -350,17 +395,15 @@ router.post('/request', async (req, res) => {
         name: destination?.name || 'Destination',
         address: destination?.address || 'Destination address',
       },
-      distanceKm: Number.isFinite(Number(distanceKm)) ? Number(distanceKm) : undefined,
-      estimatedFare: Number.isFinite(Number(distanceKm))
-        ? buildPaymentSummary({
-            ride: { selectedVehicle: selectedVehicle || 'car', distanceKm, countryCode, region },
-            vehicleId: selectedVehicle || 'car',
-            countryCode,
-            region,
-            distanceKm,
-            durationMin: Math.max(1, Math.round(Number(distanceKm) * 3)),
-          }).totalFare
-        : undefined,
+      distanceKm: routePricing.distanceKm,
+      estimatedFare: routePricing.fare.fare,
+      fareBreakdown: {
+        baseFare: routePricing.fare.breakdown.baseFare,
+        distanceFare: routePricing.fare.breakdown.distanceFare,
+        timeFare: routePricing.fare.breakdown.timeFare,
+        taxAmount: 0,
+        totalFare: routePricing.fare.fare,
+      },
       status: 'requested',
       requestedAt: new Date(),
       rejectedByDrivers: [],
