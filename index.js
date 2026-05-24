@@ -30,7 +30,7 @@ const io = new Server(server, {
 initRealtime(io);
 
 function getJwtSecret() {
-  return process.env.JWT_SECRET ;
+  return process.env.JWT_SECRET || process.env.CLERK_SECRET_KEY || 'please_change_this_secret';
 }
 
 function isRideParticipant(ride, userId) {
