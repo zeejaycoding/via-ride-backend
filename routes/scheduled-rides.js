@@ -97,7 +97,16 @@ async function enrichRideWithUsers(ride) {
   const userIds = [...new Set([riderId, driverId].filter(Boolean))];
 
   const users = userIds.length > 0
-    ? await User.find({ _id: { $in: userIds } }, { name: 1, avatarUrl: 1 }).lean()
+    ? await User.find({ _id: { $in: userIds } }, {
+        name: 1,
+        avatarUrl: 1,
+        vehicleType: 1,
+        vehicleName: 1,
+        plateNumber: 1,
+        rating: 1,
+        isOnline: 1,
+        currentLocation: 1,
+      }).lean()
     : [];
   const userMap = Object.fromEntries(users.map((user) => [String(user._id), user]));
 
